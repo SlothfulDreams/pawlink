@@ -93,10 +93,11 @@ class Course(BaseModel):
         return sum(section.remaining for section in self.sections)
 
 
-class SearchResult(BaseModel):
+# Search result model renamed to avoid conflict with TypedDict in client.py
+class SearchResultModel(BaseModel):
     """Search result from SearchNEU API."""
 
-    nodes: list[dict[str, Any]] = Field(
+    nodes: list[dict[str, Any]] = Field(  # type: ignore
         default_factory=list, description="Search result nodes"
     )
 
@@ -122,19 +123,22 @@ class ClassOccurrence(BaseModel):
     class_url: str | None = Field(None, description="Course URL")
 
 
-def parse_prerequisites(prereqs_data: Any) -> list[str]:
+def parse_prerequisites(
+    prereqs_data: str | list[Any] | dict[str, Any] | None,  # type: ignore
+) -> list[str]:
     """Parse prerequisites from API response."""
     if isinstance(prereqs_data, str):
-        return [prereqs_data]
+        return [str(prereqs_data)]
     elif isinstance(prereqs_data, list):
         return [str(prereq) for prereq in prereqs_data]
     elif isinstance(prereqs_data, Mapping):
         # Handle complex prerequisite structure
         return [str(prereqs_data)]
-    return []
+    elif prereqs_data is None:
+        return []
 
 
-def parse_meeting_times(meetings_data: list[dict[str, Any]]) -> list[MeetingTime]:
+def parse_meeting_times(meetings_data: list[dict[str, Any]]) -> list[MeetingTime]:  # type: ignore
     """Parse meeting times from API response."""
     meeting_times = []
     for meeting in meetings_data:
@@ -151,10 +155,81 @@ def parse_meeting_times(meetings_data: list[dict[str, Any]]) -> list[MeetingTime
     return meeting_times
 
 
-def parse_instructor(instructor_data: dict[str, Any] | None) -> Instructor | None:
+def parse_instructor(
+    instructor_data: dict[str, Any] | None = None,  # type: ignore
+) -> Instructor | None:
     """Parse instructor from API response."""
     if instructor_data:
         return Instructor(
             name=instructor_data.get("name"), email=instructor_data.get("email")
         )
     return None
+
+
+# GraphQL Response Types
+class GraphQLResponse(BaseModel):
+    """Base GraphQL response type."""
+
+    data: dict[str, Any] = Field(default_factory=dict)  # type: ignore
+    errors: list[dict[str, Any]] = Field(default_factory=list)  # type: ignore
+
+
+class SearchResponseModel(BaseModel):
+    """Search response from SearchNEU API."""
+
+    search: SearchResultModel = Field(..., description="Search results")
+
+
+class ClassResponse(BaseModel):
+    """Class response from SearchNEU API."""
+
+    class_data: dict[str, Any] | None = Field(None, alias="class")  # type: ignore
+
+
+class ClassByHashResponse(BaseModel):
+    """Class by hash response from SearchNEU API."""
+
+    class_by_hash: dict[str, Any] | None = Field(None, alias="classByHash")  # type: ignore
+
+
+class SectionByHashResponse(BaseModel):
+    """Section by hash response from SearchNEU API."""
+
+    section_by_hash: dict[str, Any] | None = Field(None, alias="sectionByHash")  # type: ignore
+
+
+class TermInfosResponse(BaseModel):
+    """Term infos response from SearchNEU API."""
+
+    term_infos: list[TermInfo] = Field(..., alias="termInfos")
+
+
+# Legacy response models - kept for compatibility but TypedDict in client.py is preferred
+class SearchQueryResponse(BaseModel):
+    """Search query response."""
+
+    search: dict[str, Any] = Field(..., description="Search data")  # type: ignore
+
+
+class GetClassQueryResponse(BaseModel):
+    """Get class query response."""
+
+    class_data: dict[str, Any] | None = Field(None, alias="class")  # type: ignore
+
+
+class GetClassByHashQueryResponse(BaseModel):
+    """Get class by hash query response."""
+
+    class_by_hash: dict[str, Any] | None = Field(None, alias="classByHash")  # type: ignore
+
+
+class GetSectionByHashQueryResponse(BaseModel):
+    """Get section by hash query response."""
+
+    section_by_hash: dict[str, Any] | None = Field(None, alias="sectionByHash")  # type: ignore
+
+
+class GetTermInfosQueryResponse(BaseModel):
+    """Get term infos query response."""
+
+    term_infos: list[dict[str, Any]] = Field(..., alias="termInfos")  # type: ignore

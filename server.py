@@ -1,357 +1,262 @@
-"""Core MCP server implementation for Pawlink."""
-
-import json
+import asyncio
 import logging
-from typing import Any
+import sys
 
-import mcp.server.stdio
-import mcp.types as types
-from mcp.server import NotificationOptions, Server
-from mcp.server.models import InitializationOptions
+from mcp.server.fastmcp import FastMCP
 
-from searchneu.client import SearchNEUClient
-from searchneu.models import parse_prerequisites
+from tools.searchneu.client import (
+    ClassByHashResponse,
+    ClassResponse,
+    SearchNEUClient,
+    SearchResponse,
+    SectionByHashResponse,
+    TermInfosResponse,
+)
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
+)
 logger = logging.getLogger(__name__)
 
+# Initialize FastMCP server
+mcp = FastMCP("Pawlink")
 
-class PawlinkServer:
-    """Main MCP Server implementation for Pawlink."""
+# Initialize SearchNEU client
+searchneu_client = SearchNEUClient()
 
-    def __init__(self) -> None:
-        self.server = Server("pawlink")
-        self.searchneu_client = SearchNEUClient()
-        self._setup_handlers()
 
-    def _setup_handlers(self) -> None:
-        """Set up MCP server handlers."""
+@mcp.tool(
+    name="search_courses",
+    description="Search for Northeastern University courses by keyword and academic term",
+)
+async def search_courses(keyword: str, term_id: str) -> SearchResponse:
+    """
+    Search for courses by keyword and term.
 
-        @self.server.list_tools()
-        async def list_tools() -> list[types.Tool]:
-            """List available tools."""
-            return [
-                types.Tool(
-                    name="search_courses",
-                    description="Search Northeastern University courses by keyword",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "query": {
-                                "type": "string",
-                                "description": "Search keyword or phrase",
-                            },
-                            "term_id": {
-                                "type": "string",
-                                "description": "Term ID (e.g., '202610' for Fall 2025)",
-                            },
-                            "first": {
-                                "type": "integer",
-                                "description": "Number of results to return (default: 10)",
-                                "default": 10,
-                            },
-                        },
-                        "required": ["query", "term_id"],
-                    },
-                ),
-                types.Tool(
-                    name="get_course_details",
-                    description="Get detailed information about a specific course",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "subject": {
-                                "type": "string",
-                                "description": "Course subject code (e.g., 'CS', 'MATH')",
-                            },
-                            "class_id": {
-                                "type": "string",
-                                "description": "Course number (e.g., '2500')",
-                            },
-                        },
-                        "required": ["subject", "class_id"],
-                    },
-                ),
-                types.Tool(
-                    name="get_course_by_hash",
-                    description="Get course information by hash with all sections",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "class_hash": {
-                                "type": "string",
-                                "description": "Class occurrence hash",
-                            }
-                        },
-                        "required": ["class_hash"],
-                    },
-                ),
-                types.Tool(
-                    name="get_section_details",
-                    description="Get detailed information about a specific section",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "section_hash": {
-                                "type": "string",
-                                "description": "Section hash identifier",
-                            }
-                        },
-                        "required": ["section_hash"],
-                    },
-                ),
-                types.Tool(
-                    name="get_available_terms",
-                    description="Get available academic terms",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "sub_college": {
-                                "type": "string",
-                                "description": "Sub-college code (default: 'NEU')",
-                                "default": "NEU",
-                            }
-                        },
-                    },
-                ),
-            ]
+    Args:
+        keyword: Search term for course names, descriptions, etc.
+        term_id: Academic term ID (e.g., "202410" for Fall 2024)
 
-        @self.server.call_tool()
-        async def call_tool(
-            name: str, arguments: dict[str, Any] | None
-        ) -> list[types.TextContent]:
-            """Call a tool with the given arguments."""
-            if arguments is None:
-                arguments = {}
+    Returns:
+        Search results with matching courses
+    """
+    try:
+        results = await searchneu_client.search_courses(keyword, term_id)
+        return {"search": results.get("search", {})}
+    except Exception as e:
+        logger.error(f"Error searching courses: {e}")
+        return {"search": {}}
 
-            try:
-                if name == "search_courses":
-                    result = await self._search_courses(arguments)
-                elif name == "get_course_details":
-                    result = await self._get_course_details(arguments)
-                elif name == "get_course_by_hash":
-                    result = await self._get_course_by_hash(arguments)
-                elif name == "get_section_details":
-                    result = await self._get_section_details(arguments)
-                elif name == "get_available_terms":
-                    result = await self._get_available_terms(arguments)
-                else:
-                    raise ValueError(f"Unknown tool: {name}")
 
-                return [types.TextContent(type="text", text=result)]
+@mcp.tool(
+    name="get_course_details",
+    description="Get detailed information about a specific Northeastern University course including prerequisites, credits, and NUPath requirements",
+)
+async def get_course_details(
+    subject: str, class_id: str, term_id: str
+) -> ClassResponse:
+    """
+    Get detailed information about a specific course.
 
-            except Exception as e:
-                logger.error(f"Error calling tool {name}: {e}")
-                return [types.TextContent(type="text", text=f"Error: {str(e)}")]
+    Args:
+        subject: Course subject code (e.g., "CS")
+        class_id: Course number (e.g., "2500")
+        term_id: Academic term ID (unused in current implementation)
 
-        @self.server.list_resources()
-        async def list_resources() -> list[types.Resource]:
-            """List available resources."""
-            return [
-                types.Resource(
-                    uri="pawlink://info",
-                    name="Server Information",
-                    description="Information about the Pawlink MCP server",
-                    mimeType="application/json",
-                )
-            ]
+    Returns:
+        Detailed course information including description, prerequisites, etc.
+    """
+    try:
+        course_data = await searchneu_client.get_class(subject, class_id)
+        return {"class_": course_data.get("class", {})}
+    except Exception as e:
+        logger.error(f"Error getting course details: {e}")
+        return {"class_": {}}
 
-        @self.server.read_resource()
-        async def read_resource(uri: str) -> str:
-            """Read a resource by URI."""
-            if uri == "pawlink://info":
-                return json.dumps(
-                    {
-                        "name": "Pawlink MCP Server",
-                        "version": "0.1.0",
-                        "description": "MCP Server for SearchNEU API integration",
-                        "tools": [
-                            "search_courses",
-                            "get_course_details",
-                            "get_course_by_hash",
-                            "get_section_details",
-                            "get_available_terms",
-                        ],
-                        "resources": ["pawlink://info"],
-                        "api": "SearchNEU GraphQL API",
-                    },
-                    indent=2,
-                )
-            else:
-                raise ValueError(f"Unknown resource: {uri}")
 
-    async def _search_courses(self, args: dict[str, Any]) -> str:
-        """Search for courses."""
-        query = args.get("query", "")
-        term_id = args.get("term_id", "")
-        first = args.get("first", 10)
+@mcp.tool(
+    name="get_course_by_hash",
+    description="Get complete course information including all available sections by using a course hash identifier",
+)
+async def get_course_by_hash(course_hash: str) -> ClassByHashResponse:
+    """
+    Get course information and sections by course hash.
 
-        result = await self.searchneu_client.search_courses(query, term_id, first)
+    Args:
+        course_hash: Unique hash identifier for the course
 
-        if not result.get("search", {}).get("nodes"):
-            return f"No courses found for query: '{query}' in term {term_id}"
+    Returns:
+        Course information with all sections
+    """
+    try:
+        course_data = await searchneu_client.get_class_by_hash(course_hash)
+        return {"classByHash": course_data.get("classByHash", {})}
+    except Exception as e:
+        logger.error(f"Error getting course by hash: {e}")
+        return {"classByHash": {}}
 
-        courses = []
-        for node in result["search"]["nodes"]:
-            if node.get("__typename") == "ClassOccurrence":
-                courses.append(
-                    {
-                        "name": node.get("name"),
-                        "subject": node.get("subject"),
-                        "class_id": node.get("classId"),
-                        "term_id": node.get("termId"),
-                        "credits": f"{node.get('minCredits', 0)}-{node.get('maxCredits', 0)}",
-                        "description": node.get("desc", "")[:200] + "..."
-                        if len(node.get("desc", "")) > 200
-                        else node.get("desc", ""),
-                    }
-                )
 
-        return json.dumps(courses, indent=2)
+@mcp.tool(
+    name="get_section_details",
+    description="Get detailed section information including meeting times, instructor details, enrollment capacity, and availability",
+)
+async def get_section_details(section_hash: str) -> SectionByHashResponse:
+    """
+    Get detailed information about a specific section.
 
-    async def _get_course_details(self, args: dict[str, Any]) -> str:
-        """Get detailed course information."""
-        subject = args.get("subject", "")
-        class_id = args.get("class_id", "")
+    Args:
+        section_hash: Unique hash identifier for the section
 
-        result = await self.searchneu_client.get_class(subject, class_id)
+    Returns:
+        Section details including meeting times, instructor, availability
+    """
+    try:
+        section_data = await searchneu_client.get_section_by_hash(section_hash)
+        return {"sectionByHash": section_data.get("sectionByHash", {})}
+    except Exception as e:
+        logger.error(f"Error getting section details: {e}")
+        return {"sectionByHash": {}}
 
-        if not result.get("class"):
-            return f"Course not found: {subject} {class_id}"
 
-        class_data = result["class"]
-        latest_occurrence = class_data.get("latestOccurrence", {})
+@mcp.tool(
+    name="get_available_terms",
+    description="Get all available academic terms for Northeastern University to use with other course search tools",
+)
+async def get_available_terms() -> TermInfosResponse:
+    """
+    Get list of available academic terms.
 
-        course_info = {
-            "name": class_data.get("name"),
-            "subject": class_data.get("subject"),
-            "class_id": class_data.get("classId"),
-            "credits": f"{latest_occurrence.get('minCredits', 0)}-{latest_occurrence.get('maxCredits', 0)}",
-            "description": latest_occurrence.get("desc"),
-            "prerequisites": parse_prerequisites(latest_occurrence.get("prereqs", [])),
-            "corequisites": parse_prerequisites(latest_occurrence.get("coreqs", [])),
-            "nupath": latest_occurrence.get("nupath", []),
-            "term_id": latest_occurrence.get("termId"),
-            "url": None,  # classUrl field doesn't exist in the schema,
-        }
+    Returns:
+        List of available terms with IDs and names
+    """
+    try:
+        terms_data = await searchneu_client.get_term_infos()
+        return {"termInfos": terms_data.get("termInfos", [])}
+    except Exception as e:
+        logger.error(f"Error getting available terms: {e}")
+        return {"termInfos": []}
 
-        return json.dumps(course_info, indent=2)
 
-    async def _get_course_by_hash(self, args: dict[str, Any]) -> str:
-        """Get course by hash with sections."""
-        class_hash = args.get("class_hash", "")
-
-        result = await self.searchneu_client.get_class_by_hash(class_hash)
-
-        if not result.get("classByHash"):
-            return f"Class not found for hash: {class_hash}"
-
-        class_data = result["classByHash"]
-
-        # Parse sections
-        sections = []
-        for section_data in class_data.get("sections", []):
-            section = {
-                "hash": section_data.get("hash"),
-                "crn": section_data.get("crn"),
-                "class_nbr": section_data.get("classNbr"),
-                "capacity": section_data.get("capacity"),
-                "remaining": section_data.get("remaining"),
-                "instructor": section_data.get("instructor", {}).get("name"),
-                "meetings": [],
-            }
-
-            for meeting in section_data.get("meetings", []):
-                section["meetings"].append(
-                    {
-                        "days": meeting.get("daysPattern"),
-                        "time": f"{meeting.get('startTime', '')} - {meeting.get('endTime', '')}",
-                        "location": meeting.get("location"),
-                    }
-                )
-
-            sections.append(section)
-
-        course_info = {
-            "name": class_data.get("name"),
-            "subject": class_data.get("subject"),
-            "class_id": class_data.get("classId"),
-            "term_id": class_data.get("termId"),
-            "credits": f"{class_data.get('minCredits', 0)}-{class_data.get('maxCredits', 0)}",
-            "description": class_data.get("desc"),
-            "prerequisites": parse_prerequisites(class_data.get("prereqs", [])),
-            "corequisites": parse_prerequisites(class_data.get("coreqs", [])),
-            "nupath": class_data.get("nupath", []),
-            "sections": sections,
-        }
-
-        return json.dumps(course_info, indent=2)
-
-    async def _get_section_details(self, args: dict[str, Any]) -> str:
-        """Get section details by hash."""
-        section_hash = args.get("section_hash", "")
-
-        result = await self.searchneu_client.get_section_by_hash(section_hash)
-
-        if not result.get("sectionByHash"):
-            return f"Section not found for hash: {section_hash}"
-
-        section_data = result["sectionByHash"]
-
-        meetings = []
-        for meeting in section_data.get("meetings", []):
-            meetings.append(
-                {
-                    "days": meeting.get("daysPattern"),
-                    "time": f"{meeting.get('startTime', '')} - {meeting.get('endTime', '')}",
-                    "location": meeting.get("location"),
-                    "dates": f"{meeting.get('startDate', '')} to {meeting.get('endDate', '')}",
-                }
+async def test_api_connection() -> bool:
+    """Test connection to SearchNEU API."""
+    try:
+        terms = await searchneu_client.get_term_infos()
+        term_infos = terms.get("termInfos", [])
+        if isinstance(term_infos, list):
+            logger.info(
+                f"Successfully connected to SearchNEU API. Found {len(term_infos)} terms."
             )
+        else:
+            logger.info("Successfully connected to SearchNEU API. Found 0 terms.")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to connect to SearchNEU API: {e}")
+        return False
 
-        section_info = {
-            "crn": section_data.get("crn"),
-            "class_nbr": section_data.get("classNbr"),
-            "capacity": section_data.get("capacity"),
-            "remaining": section_data.get("remaining"),
-            "waitlisted": section_data.get("waitlisted"),
-            "instructor": section_data.get("instructor", {}).get("name"),
-            "instructor_email": section_data.get("instructor", {}).get("email"),
-            "meetings": meetings,
-            "enrollment_status": f"{section_data.get('capacity', 0) - section_data.get('remaining', 0)}/{section_data.get('capacity', 0)} enrolled",
-        }
 
-        return json.dumps(section_info, indent=2)
+async def run_server_async(
+    transport: str = "stdio",
+    _host: str = "127.0.0.1",
+    _port: int = 8000,
+    log_level: str = "INFO",
+) -> None:
+    """
+    Run the FastMCP server asynchronously.
 
-    async def _get_available_terms(self, args: dict[str, Any]) -> str:
-        """Get available terms."""
-        sub_college = args.get("sub_college", "NEU")
+    Args:
+        transport: Transport protocol ('stdio', 'http', 'sse', 'streamable-http')
+        _host: Host to bind to (for HTTP/SSE transports)
+        _port: Port to bind to (for HTTP/SSE transports)
+        log_level: Logging level
+    """
+    # Set log level
+    log_level_value = getattr(logging, log_level.upper(), logging.INFO)
+    logging.getLogger().setLevel(log_level_value)
 
-        result = await self.searchneu_client.get_term_infos(sub_college)
+    logger.info(f"Starting Pawlink MCP Server (FastMCP) with {transport} transport")
 
-        terms = []
-        for term_data in result.get("termInfos", []):
-            terms.append(
-                {
-                    "term_id": term_data.get("termId"),
-                    "sub_college": term_data.get("subCollege"),
-                    "description": term_data.get("text"),
-                }
-            )
+    # Test API connection
+    if not await test_api_connection():
+        logger.warning("API connection test failed, but server will continue to run")
 
-        return json.dumps(terms, indent=2)
+    # Configure transport-specific settings
+    if transport == "stdio":
+        await mcp.run_stdio_async()
+    elif transport == "http":
+        # HTTP transport not supported by FastMCP, fall back to stdio
+        logger.warning("HTTP transport not supported by FastMCP, falling back to stdio")
+        await mcp.run_stdio_async()
+    elif transport == "sse":
+        # For SSE transport, use the synchronous method
+        mcp.run(transport="sse")
+    elif transport == "streamable-http":
+        # For streamable HTTP transport, use the synchronous method
+        mcp.run(transport="streamable-http")
+    else:
+        logger.error(f"Unsupported transport: {transport}")
+        raise ValueError(f"Unsupported transport: {transport}")
 
-    async def run_stdio(self) -> None:
-        """Run the server using stdio transport."""
-        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                InitializationOptions(
-                    server_name="pawlink",
-                    server_version="0.1.0",
-                    capabilities=self.server.get_capabilities(
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities={},
-                    ),
-                ),
-            )
+
+def run_server(
+    transport: str = "stdio",
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    log_level: str = "INFO",
+) -> None:
+    """
+    Run the FastMCP server (synchronous wrapper).
+
+    Args:
+        transport: Transport protocol ('stdio', 'http', 'sse', 'streamable-http')
+        host: Host to bind to (for HTTP/SSE transports)
+        port: Port to bind to (for HTTP/SSE transports)
+        log_level: Logging level
+    """
+    asyncio.run(run_server_async(transport, host, port, log_level))
+
+
+def main():
+    """Main entry point for the MCP server."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Pawlink MCP Server")
+    _ = parser.add_argument(
+        "--transport",
+        choices=["stdio", "http", "sse", "streamable-http"],
+        default="stdio",
+        help="Transport protocol to use (default: stdio)",
+    )
+    _ = parser.add_argument(
+        "--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)"
+    )
+    _ = parser.add_argument(
+        "--port", type=int, default=8000, help="Port to bind to (default: 8000)"
+    )
+    _ = parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="INFO",
+        help="Logging level (default: INFO)",
+    )
+
+    args = parser.parse_args()
+
+    try:
+        run_server(
+            transport=str(args.transport),
+            host=str(args.host),
+            port=int(args.port),
+            log_level=str(args.log_level),
+        )
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+    except Exception as e:
+        logger.error(f"Server error: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

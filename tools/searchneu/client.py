@@ -1,18 +1,48 @@
 """SearchNEU GraphQL client implementation."""
 
 import logging
-from typing import Any
+from typing import Any, NotRequired, TypedDict  # type: ignore
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 
+class ClassResponse(TypedDict):
+    """Type for class response from SearchNEU API."""
+
+    class_: NotRequired[dict[str, Any]]
+
+
+class SearchResponse(TypedDict):
+    """Type for search response from SearchNEU API."""
+
+    search: dict[str, Any]
+
+
+class ClassByHashResponse(TypedDict):
+    """Type for class by hash response from SearchNEU API."""
+
+    classByHash: NotRequired[dict[str, Any]]
+
+
+class SectionByHashResponse(TypedDict):
+    """Type for section by hash response from SearchNEU API."""
+
+    sectionByHash: NotRequired[dict[str, Any]]
+
+
+class TermInfosResponse(TypedDict):
+    """Type for term infos response from SearchNEU API."""
+
+    termInfos: list[dict[str, Any]]
+
+
 class SearchNEUClient:
     """Client for interacting with the SearchNEU GraphQL API."""
 
     def __init__(self, api_url: str = "https://api.searchneu.com/api/") -> None:
-        self.api_url = api_url
+        self.api_url: str = api_url
 
     async def execute_query(
         self, query: str, variables: dict[str, Any] | None = None
@@ -20,7 +50,7 @@ class SearchNEUClient:
         """Execute a GraphQL query."""
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                payload = {"query": query}
+                payload: dict[str, Any] = {"query": query}  # type: ignore
                 if variables:
                     payload["variables"] = variables
 
@@ -29,14 +59,14 @@ class SearchNEUClient:
                     headers={"Content-Type": "application/json"},
                     json=payload,
                 )
-                response.raise_for_status()
+                _ = response.raise_for_status()
                 result = response.json()
 
                 if "errors" in result:
                     logger.error(f"GraphQL errors: {result['errors']}")
                     raise Exception(f"GraphQL query failed: {result['errors']}")
 
-                return result.get("data", {})
+                return result.get("data", {})  # type: ignore
 
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
@@ -123,20 +153,12 @@ class SearchNEUClient:
                 coreqs
                 nupath
                 sections {
-                    hash
+                    host
                     crn
-                    classNbr
-                    capacity
-                    remaining
-                    instructor {
-                        name
-                    }
-                    meetings {
-                        daysPattern
-                        startTime
-                        endTime
-                        location
-                    }
+                    classId
+                    waitCapacity
+                    waitRemaining
+                    meetings
                 }
             }
         }
@@ -149,24 +171,12 @@ class SearchNEUClient:
         query = """
         query GetSectionByHash($hash: String!) {
             sectionByHash(hash: $hash) {
-                hash
+                host
                 crn
-                classNbr
-                capacity
-                remaining
-                waitlisted
-                instructor {
-                    name
-                    email
-                }
-                meetings {
-                    daysPattern
-                    startTime
-                    endTime
-                    location
-                    startDate
-                    endDate
-                }
+                classId
+                waitCapacity
+                waitRemaining
+                meetings
             }
         }
         """
