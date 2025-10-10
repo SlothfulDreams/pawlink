@@ -1,5 +1,5 @@
 __pycache__
-.venv
-*.local.*
 .mypy_cache
-.ruff_cache
+.venv
+
+*.local.*
